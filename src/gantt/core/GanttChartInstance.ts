@@ -1,5 +1,6 @@
 import type { Bar } from "./data.ts";
 import type { Viewport, GanttRenderer } from "./renderer.ts";
+import type { BarSearchStrategy } from "./search.ts";
 import { createRenderer } from "./renderer.ts";
 import { setupInteraction } from "./interaction.ts";
 
@@ -8,6 +9,7 @@ export interface GanttChartOptions {
   onBarClick?: (bar: Bar, index: number) => void;
   formatTooltip?: (bar: Bar, index: number) => string;
   onViewportChange?: (viewStart: number, viewEnd: number, isZoomed: boolean) => void;
+  searchStrategy?: BarSearchStrategy;
 }
 
 interface InstanceParts {
@@ -63,6 +65,7 @@ export class GanttChartInstance {
     const cleanupInteraction = setupInteraction(renderer, options.bars, tooltip, selection, {
       onBarClick: options.onBarClick,
       formatTooltip: options.formatTooltip,
+      searchStrategy: options.searchStrategy,
       onZoom(vs, ve) {
         renderer.viewport.viewStart = vs;
         renderer.viewport.viewEnd = ve;

@@ -9,14 +9,16 @@ export interface GanttChartProps {
   formatTooltip?: (bar: Bar, index: number) => string;
 }
 
+const MINUTE = 60_000;
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 const AXIS_FORMATS: [number, Intl.DateTimeFormatOptions][] = [
-  [HOUR,      { hour: "2-digit", minute: "2-digit", second: "2-digit" }],
-  [DAY,       { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }],
-  [DAY * 30,  { month: "short", day: "numeric" }],
-  [Infinity,  { year: "numeric", month: "short" }],
+  [MINUTE,     { hour: "2-digit", minute: "2-digit", second: "2-digit" }],
+  [HOUR,       { hour: "2-digit", minute: "2-digit" }],
+  [DAY * 3,    { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }],
+  [DAY * 60,   { month: "short", day: "numeric" }],
+  [Infinity,   { year: "numeric", month: "short" }],
 ];
 
 function formatAxisTick(ms: number, span: number): string {

@@ -2,6 +2,8 @@ import shaderCode from "./gantt.wgsl?raw";
 import type { Bar } from "./data.ts";
 import { packBarsForGPU, INSTANCE_STRIDE } from "./data.ts";
 
+export const MIN_PIXEL_WIDTH = 2;
+
 export interface Viewport {
   viewStart: number;
   viewEnd: number;
@@ -39,7 +41,10 @@ export async function createRenderer(
 
   configureContext();
 
-  const instanceData = packBarsForGPU(bars);
+  // Subtract a reference time so float32 values stay small and precise when zoomed in
+  const timeOffset = bars[0].start;
+
+  const instanceData = packBarsForGPU(bars, timeOffset);
   const instanceBuffer = device.createBuffer({
     size: instanceData.byteLength,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
@@ -98,10 +103,10 @@ export async function createRenderer(
       const f32 = new Float32Array(buf);
       const i32 = new Int32Array(buf);
 
-      f32[0] = state.viewport.viewStart;
-      f32[1] = state.viewport.viewEnd;
+      f32[0] = state.viewport.viewStart - timeOffset;
+      f32[1] = state.viewport.viewEnd - timeOffset;
       f32[2] = canvas.width;
-      f32[3] = 2; // minPixelWidth
+      f32[3] = MIN_PIXEL_WIDTH;
       i32[4] = state.highlightIndex;
 
       device.queue.writeBuffer(uniformBuffer, 0, buf);

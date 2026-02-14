@@ -1,23 +1,21 @@
 import type { Bar } from "./data.ts";
 import type { GanttRenderer } from "./renderer.ts";
+import type { BarSearchStrategy, SearchContext } from "./search.ts";
+import { createBinarySearchStrategy } from "./search.ts";
 
 export interface InteractionOptions {
   onBarClick?: (bar: Bar, index: number) => void;
   formatTooltip?: (bar: Bar, index: number) => string;
   onZoom?: (viewStart: number, viewEnd: number) => void;
+  searchStrategy?: BarSearchStrategy;
 }
 
-// Minimum px the mouse must move before a drag is recognized (avoids accidental drags on click)
 const DRAG_THRESHOLD = 5;
 
 function defaultTooltip(bar: Bar, _index: number): string {
   return `${bar.label} | ${fmtDate(bar.start)} — ${fmtDate(bar.end)}`;
 }
 
-/**
- * Attaches mouse listeners to the renderer's canvas for hover, click, and drag-to-zoom.
- * Returns a cleanup function that removes all listeners.
- */
 export function setupInteraction(
   renderer: GanttRenderer,
   bars: Bar[],
@@ -29,69 +27,30 @@ export function setupInteraction(
   const onBarClick = options.onBarClick;
   const onZoom = options.onZoom;
   const { canvas } = renderer;
+  const strategy = options.searchStrategy ?? createBinarySearchStrategy(bars);
 
-  let dragStartX: number | null = null;
-  let dragging = false;
-
-  // Convert a horizontal pixel offset (relative to canvas) to a timestamp
-  function pixelToTime(px: number): number {
-    const { viewStart, viewEnd } = renderer.viewport;
-    const rect = canvas.getBoundingClientRect();
-    return viewStart + (px / rect.width) * (viewEnd - viewStart);
+  function getSearchCtx(): SearchContext {
+    return {
+      viewStart: renderer.viewport.viewStart,
+      viewEnd: renderer.viewport.viewEnd,
+      canvasWidth: canvas.clientWidth,
+    };
   }
 
-  /**
-   * Find the bar under a given timestamp using binary search + local scan.
-   *
-   * 1. Binary search to find the insertion point (last bar whose start <= time).
-   * 2. Scan a small window around that index for exact hit (time within [start, end]).
-   * 3. If no exact hit, do a second pass for bars that are visually expanded
-   *    (the GPU shader enforces a minPixelWidth — we mirror that logic here
-   *    so hover matches what the user actually sees on screen).
-   */
-  function findBarAt(time: number): number {
-    let lo = 0;
-    let hi = bars.length - 1;
+  function findBarAt(px: number): number {
+    return strategy.find(px, getSearchCtx());
+  }
 
-    // Binary search: find rightmost bar with start <= time
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (bars[mid].start <= time) lo = mid + 1;
-      else hi = mid - 1;
-    }
-
-    // Scan neighbours — bars can overlap so we check a radius around the insertion point
-    const scanRadius = 20;
-    const from = Math.max(0, hi - scanRadius);
-    const to = Math.min(bars.length - 1, hi + scanRadius);
-
-    // First pass: exact data-range hit
-    for (let i = to; i >= from; i--) {
-      const b = bars[i];
-      if (time >= b.start && time <= b.end) return i;
-    }
-
-    // Second pass: account for bars stretched to minimum pixel width by the shader.
-    // Convert the minPixelWidth (2px) back to a time span so we can enlarge
-    // tiny bars on the CPU side to match what the GPU renders.
+  function pixelToTime(px: number): number {
     const { viewStart, viewEnd } = renderer.viewport;
-    const viewSpan = viewEnd - viewStart;
-    const minTimeSpan = (2 / canvas.width) * viewSpan;
-
-    for (let i = to; i >= from; i--) {
-      const b = bars[i];
-      const dataSpan = b.end - b.start;
-      if (dataSpan < minTimeSpan) {
-        const center = (b.start + b.end) / 2;
-        const half = minTimeSpan / 2;
-        if (time >= center - half && time <= center + half) return i;
-      }
-    }
-
-    return -1;
+    const w = canvas.getBoundingClientRect().width;
+    return viewStart + (px / w) * (viewEnd - viewStart);
   }
 
   // --- Mouse handlers ---
+
+  let dragStartX: number | null = null;
+  let dragging = false;
 
   function onMouseDown(e: MouseEvent) {
     dragStartX = e.clientX;
@@ -102,25 +61,21 @@ export function setupInteraction(
   function onMouseMove(e: MouseEvent) {
     const rect = canvas.getBoundingClientRect();
 
-    // If mouse is held down, check if we've exceeded the drag threshold → show selection overlay
     if (dragStartX !== null) {
       const dx = Math.abs(e.clientX - dragStartX);
       if (dx >= DRAG_THRESHOLD) {
         dragging = true;
         const left = Math.min(dragStartX, e.clientX) - rect.left;
-        const width = dx;
         selection.style.display = "block";
         selection.style.left = `${left}px`;
-        selection.style.width = `${width}px`;
+        selection.style.width = `${dx}px`;
         canvas.style.cursor = "col-resize";
         return;
       }
     }
 
-    // Normal hover: find bar under cursor and show tooltip
     const px = e.clientX - rect.left;
-    const time = pixelToTime(px);
-    const idx = findBarAt(time);
+    const idx = findBarAt(px);
     renderer.highlightIndex = idx;
 
     if (idx >= 0) {
@@ -128,7 +83,6 @@ export function setupInteraction(
       tooltip.textContent = formatTooltip(bar, idx);
       tooltip.style.display = "block";
 
-      // Position tooltip near cursor, flipping if it would overflow the viewport
       const tw = tooltip.offsetWidth;
       const th = tooltip.offsetHeight;
       const gap = 12;
@@ -151,21 +105,16 @@ export function setupInteraction(
     selection.style.display = "none";
 
     if (dragging && dragStartX !== null) {
-      // Drag ended → convert the selection rectangle to a time range and zoom
       const rect = canvas.getBoundingClientRect();
       const x1 = Math.min(dragStartX, e.clientX) - rect.left;
       const x2 = Math.max(dragStartX, e.clientX) - rect.left;
-      const t1 = pixelToTime(x1);
-      const t2 = pixelToTime(x2);
-      onZoom?.(t1, t2);
+      onZoom?.(pixelToTime(x1), pixelToTime(x2));
+      strategy.invalidate();
     } else if (dragStartX !== null) {
-      // Mouse barely moved → treat as click
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left;
-      const idx = findBarAt(pixelToTime(px));
-      if (idx >= 0) {
-        onBarClick?.(bars[idx], idx);
-      }
+      const idx = findBarAt(px);
+      if (idx >= 0) onBarClick?.(bars[idx], idx);
     }
 
     dragStartX = null;
@@ -195,9 +144,12 @@ export function setupInteraction(
 }
 
 function fmtDate(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, {
+  return new Date(ms).toLocaleString(undefined, {
     year: "numeric",
     month: "short",
     day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
   });
 }
