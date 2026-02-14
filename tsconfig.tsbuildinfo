@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/gantt/core/ganttchartinstance.ts","./src/gantt/core/data.ts","./src/gantt/core/interaction.ts","./src/gantt/core/renderer.ts","./src/gantt/react/ganttchart.tsx","./src/mock/data.ts"],"version":"5.9.3"}
